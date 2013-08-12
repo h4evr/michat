@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>miChat</title>
+    <meta charset="UTF-8"/>
+    <style>
+        body {
+            font-family: sans-serif;
+            font-size: 16px;
+        }
+
+        label {
+            display: block;
+            font-size: 90%;
+        }
+
+        .side {
+            float: left;
+            margin-right: 20px;
+        }
+
+        .clear {
+            clear: both;
+        }
+
+        .fill {
+            width: 100%;
+            height: 100%;
+        }
+
+        #conversationArea {
+            width: 640px;
+            height: 400px;
+        }
+
+        #conversationArea .users {
+            width: 150px;
+            height: 400px;
+        }
+
+        #conversationArea .conversation {
+            width: 450px;
+            height: 400px;
+        }
+
+        #conversation {
+            font-family: courier, serif;
+            font-size: 80%;
+            font-weight: normal;
+        }
+    </style>
+</head>
+<body>
+    <div class="side">
+        <label for="username">Username:</label>
+        <input id="username" type="text">
+        <button id="btnConnect">Login</button>
+        <button id="btnLogout" disabled>Logout</button>
+    </div>
+
+    <div class="side">
+        <label for="room">Room:</label>
+        <input id="room" type="text">
+        <button id="btnJoinRoom">Join</button>
+    </div>
+
+    <div class="clear"></div>
+
+    <div class="side">
+        <label for="rooms">Rooms:</label>
+        <select id="rooms"></select>
+        <button id="btnLeaveRoom">Leave</button>
+    </div>
+    <div class="side">
+        <label for="msg">Message:</label>
+        <input id="msg" type="text">
+        <button id="btnSend">Send</button>
+    </div>
+
+    <div class="clear"></div>
+
+    <div id="conversationArea" style="display: none;">
+        <div class="users side">
+            <label for="users">Members:</label>
+            <select id="users" multiple class="fill"></select>
+        </div>
+        <div class="conversation side">
+            <label for="conversation">Conversation:</label>
+            <div id="conversation" style="overflow: scroll; border: 1px solid #2e2e2e; " class="fill"></div>
+        </div>
+    </div>
+
+    <script>
+        var connection,
+            conversations = {};
+
+        var ActionHandler = {
+            'identify': function (connection, username) {
+                connection.send(JSON.stringify({
+                    type: 'identify',
+                    username: username
+                }));
+            },
+
+            'join': function (connection, room) {
+                connection.send(JSON.stringify({
+                    type: 'join',
+                    room: room
+                }));
+
+                conversations[room] = {
+                    users: [],
+                    conversation: ""
+                };
+
+                var rooms = document.getElementById("rooms"),
+                    roomChild = document.createElement("option");
+
+                roomChild.setAttribute("value", room);
+                roomChild.innerHTML = room;
+                rooms.appendChild(roomChild);
+            },
+
+            'leave': function (connection, room) {
+                connection.send(JSON.stringify({
+                    type: 'leave',
+                    room: room
+                }));
+
+                var rooms = document.getElementById("rooms");
+                var roomsToDelete = rooms.querySelectorAll("option[value=" + room + "]");
+                for (var i = 0, len = roomsToDelete.length; i < len; ++i) {
+                    rooms.removeChild(roomsToDelete[i]);
+                }
+
+                delete conversations[room];
+
+                if (rooms.childNodes.length == 0) {
+                    ActionHandler.viewRoom(null);
+                }
+            },
+
+            'broadcast': function (connection, room, msg) {
+                connection.send(JSON.stringify({
+                    type: 'broadcast',
+                    room: room,
+                    message: msg
+                }));
+            },
+
+            'updateMembers': function (room) {
+                var users = document.getElementById("users"),
+                        html = "";
+
+                // update room members
+                if (room) {
+                    var roomMembers = conversations[room].users;
+                    for (var i = 0, len = roomMembers.length; i < len; ++i) {
+                        html += "<option value=\"" + roomMembers[i] + "\">" + roomMembers[i] + "</option>";
+                    }
+                }
+
+                users.innerHTML = html;
+            },
+
+            'viewRoom': function (room) {
+                var rooms = document.getElementById("rooms");
+                rooms.value = room;
+
+                ActionHandler.updateMembers(room);
+
+                // update conversation
+                if (room) {
+                    document.getElementById("conversation").innerHTML = conversations[room].conversation;
+                    document.getElementById("conversationArea").style.display = "block";
+                } else {
+                    document.getElementById("conversation").innerHTML = "";
+                    document.getElementById("conversationArea").style.display = "none";
+                }
+            }
+        };
+
+        var MessageHandler = {
+            'error': function (msg) {
+                console.error(msg.message);
+            },
+
+            'login': function (msg) {
+                console.log("User " + msg.username + " has joined room " + msg.room);
+
+                if (conversations[msg.room].users.indexOf(msg.username) == -1) {
+                    conversations[msg.room].users.push(msg.username);
+                }
+
+                if (msg.room === document.getElementById("rooms").value) {
+                    ActionHandler.updateMembers(msg.room);
+                }
+            },
+
+            'logout': function (msg) {
+                console.log("User " + msg.username + " has left room " + msg.room);
+
+                if (conversations[msg.room]) {
+                    var users = conversations[msg.room].users;
+                    for (var i = 0, len = users.length; i < len; ++i) {
+                        if (users[i] == msg.username) {
+                            users.splice(i, 1);
+                            --i;
+                            --len;
+                        }
+                    }
+
+                    if (msg.room === document.getElementById("rooms").value) {
+                        ActionHandler.updateMembers(msg.room);
+                    }
+                }
+            },
+
+            'broadcast': function (msg) {
+                var m = msg.timestamp + " (" + msg.username + "): " + msg.message + "\n";
+                conversations[msg.room].conversation += m;
+
+                if (msg.room === document.getElementById("rooms").value) {
+                    document.getElementById("conversation").innerHTML += m;
+                }
+            },
+
+            'members': function (msg) {
+                conversations[msg.room].users = msg.users;
+
+                if (msg.room === document.getElementById("rooms").value) {
+                    ActionHandler.updateMembers(msg.room);
+                }
+            }
+        };
+
+        document.getElementById("btnConnect").addEventListener('click', function () {
+            var server = "127.0.0.1:3000";
+            window.WebSocket = window.WebSocket || window.MozWebSocket;
+
+            try {
+                connection = new WebSocket("ws://" + server);
+            } catch (e) {
+                console.error(e);
+                return;
+            }
+
+            connection.onopen = function () {
+                ActionHandler.identify(connection, document.getElementById("username").value);
+
+                document.getElementById("btnLogout").removeAttribute("disabled");
+                document.getElementById("btnConnect").setAttribute("disabled", "disabled");
+                document.getElementById("username").setAttribute("disabled", "disabled");
+            };
+
+            connection.onerror = function (error) {
+                console.error(error);
+            };
+
+            connection.onmessage = function (message) {
+                var msg;
+
+                try {
+                    console.log(message.data);
+                    msg = JSON.parse(message.data);
+                } catch (e) {
+                    console.error("Invalid message", message.data, e);
+                    return;
+                }
+
+                if (MessageHandler[msg.type] === undefined) {
+                    console.error("Invalid message type: " + msg.type);
+                    return;
+                }
+
+                MessageHandler[msg.type](msg);
+            };
+        });
+
+        document.getElementById("btnLogout").addEventListener('click', function () {
+            connection.close();
+            document.getElementById("btnLogout").setAttribute("disabled", "disabled");
+            document.getElementById("btnConnect").removeAttribute("disabled");
+            document.getElementById("username").removeAttribute("disabled");
+        });
+
+        document.getElementById("btnJoinRoom").addEventListener('click', function () {
+            var room = document.getElementById("room").value;
+            ActionHandler.join(connection, room);
+            ActionHandler.viewRoom(room);
+        });
+
+        document.getElementById("btnLeaveRoom").addEventListener('click', function () {
+            ActionHandler.leave(connection, document.getElementById("rooms").value);
+        });
+
+        document.getElementById("btnSend").addEventListener('click', function () {
+            var room = document.getElementById("rooms").value;
+            if (!room) {
+                console.error("No room is selected.");
+                return;
+            }
+
+            ActionHandler.broadcast(connection, room, document.getElementById("msg").value);
+        });
+
+        document.getElementById("rooms").addEventListener('change', function () {
+            var room = this.value;
+            if (!room) {
+                return;
+            }
+
+            ActionHandler.viewRoom(room);
+        });
+
+        window.onbeforeunload = function () {
+            if (connection) {
+                connection.close();
+            }
+        };
+    </script>
+</body>
+</html>
